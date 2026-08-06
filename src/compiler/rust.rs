@@ -1968,12 +1968,54 @@ impl<T: CommandCreatorSync> Compilation<T> for RustCompilation {
 
         trace!("[{}]: compile", crate_name);
 
+        // Cross-checkout output normalization (sccache#2595): rustc bakes absolute
+        // paths into the rlib — notably the build-script OUT_DIR that deps like
+        // serde `include!` — so the SAME dependency compiled in two git worktrees
+        // emits byte-different rlibs. sccache folds rlib content into the cache key
+        // (hash of the externs), so that divergence cascades misses across the dep
+        // graph. Inject `--remap-path-prefix` for each per-compile basedir
+        // (SCCACHE_BASEDIRS from THIS compile's env) so the embedded paths become
+        // checkout-relative and the rlib is byte-identical across checkouts. The
+        // cache key is computed separately, from the ORIGINAL args with basedirs
+        // already stripped, so this injection never re-keys; cargo also computes
+        // `-C metadata` without it, so symbol names stay checkout-stable. Mirrors
+        // the dist-path `--remap-path-prefix` injection below.
+        let mut compile_arguments: Vec<OsString> = arguments
+            .iter()
+            .flat_map(|arg| arg.iter_os_strings())
+            .collect();
+        {
+            // Normalize identically to the hasher's basedirs (config.rs) —
+            // collapse `.`/`..` and add the trailing `/` — so the remap "from"
+            // matches the collapsed absolute paths rustc bakes in. cargo's
+            // `[env] relative=true` yields an UNcollapsed value (e.g. ".../rust/
+            // ../../.."), which would otherwise never match.
+            let remaps: Vec<OsString> = env_vars
+                .iter()
+                .find(|(k, _)| k == "SCCACHE_BASEDIRS")
+                .map(|(_, v)| v.to_string_lossy().into_owned())
+                .and_then(|val| {
+                    crate::config::normalize_basedirs(crate::config::split_basedirs(&val)).ok()
+                })
+                .into_iter()
+                .flatten()
+                .map(|b| {
+                    // b is `<collapsed-root>/` (trailing slash already present).
+                    OsString::from(format!(
+                        "--remap-path-prefix={}=",
+                        String::from_utf8_lossy(&b)
+                    ))
+                })
+                .collect();
+            if !remaps.is_empty() {
+                let mut prefixed = remaps;
+                prefixed.append(&mut compile_arguments);
+                compile_arguments = prefixed;
+            }
+        }
         let command = SingleCompileCommand {
             executable: executable.to_owned(),
-            arguments: arguments
-                .iter()
-                .flat_map(|arg| arg.iter_os_strings())
-                .collect(),
+            arguments: compile_arguments,
             env_vars: env_vars.to_owned(),
             cwd: cwd.to_owned(),
             // rustc reads `CARGO_MAKEFLAGS` and runs codegen on a thread pool
