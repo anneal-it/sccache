@@ -87,6 +87,78 @@ fn test_rust_cargo_basedirs_cross_dir_cache_hit() -> Result<()> {
     Ok(())
 }
 
+#[test]
+#[serial]
+fn test_rust_cargo_basedirs_per_compile_env_cross_dir_cache_hit() -> Result<()> {
+    // Like the test above, but the basedirs are supplied ONLY in each compile's
+    // environment (SCCACHE_BASEDIRS on the cargo invocation) — the sccache
+    // SERVER is started WITHOUT any basedirs. This is the git-worktree workflow
+    // (sccache#2595): the daemon is long-lived and cannot know about worktrees
+    // created after it started, so the per-compile env must drive path
+    // stripping. Each build passes only ITS OWN root, exactly as a per-checkout
+    // cargo `[env]` (SCCACHE_BASEDIRS = "../../..") would. Before per-request
+    // basedirs, the second build missed (the daemon had no basedirs to strip).
+    let work = tempfile::Builder::new()
+        .prefix("sccache_basedirs_percompile")
+        .tempdir()
+        .context("tempdir")?;
+    // Canonicalize on Unix so the basedir matches cargo's resolved
+    // CARGO_MANIFEST_DIR (macOS /var -> /private/var); see the test above.
+    #[cfg(unix)]
+    let work_root = fs::canonicalize(work.path())?;
+    #[cfg(not(unix))]
+    let work_root = work.path().to_path_buf();
+    let root_a = work_root.join("machine_a");
+    let root_b = work_root.join("machine_b");
+    let crate_a = root_a.join("project");
+    let crate_b = root_b.join("project");
+    copy_crate(&CRATE_DIR, &crate_a)?;
+    copy_crate(&CRATE_DIR, &crate_b)?;
+
+    // Server has NO basedirs; only the per-compile env carries them.
+    let test = SccacheTest::new(None)?;
+
+    run_cargo_build_with_basedir(&test, &crate_a, &crate_a.join("target"), &root_a)?;
+    run_cargo_build_with_basedir(&test, &crate_b, &crate_b.join("target"), &root_b)?;
+
+    test.show_stats()?
+        .try_stdout(predicates::str::contains(r#""cache_hits":{"counts":{"Rust":2}"#).from_utf8())?
+        .try_success()?;
+    Ok(())
+}
+
+// Like run_cargo_build, but also injects SCCACHE_BASEDIRS = `basedir` into the
+// per-compile environment (the sccache server itself is basedir-less). Models a
+// single git worktree whose cargo `[env]` sets SCCACHE_BASEDIRS to its own root.
+fn run_cargo_build_with_basedir(
+    test: &SccacheTest,
+    cwd: &Path,
+    target_dir: &Path,
+    basedir: &Path,
+) -> Result<()> {
+    let env: Vec<_> = test
+        .env
+        .iter()
+        .filter(|(k, _)| *k != "CARGO_TARGET_DIR")
+        .cloned()
+        .chain(std::iter::once((
+            "CARGO_TARGET_DIR",
+            target_dir.as_os_str().to_owned(),
+        )))
+        .chain(std::iter::once((
+            "SCCACHE_BASEDIRS",
+            basedir.as_os_str().to_owned(),
+        )))
+        .collect();
+    Command::new(CARGO.as_os_str())
+        .arg("build")
+        .envs(env)
+        .current_dir(cwd)
+        .assert()
+        .try_success()?;
+    Ok(())
+}
+
 fn copy_crate(src: &Path, dst: &Path) -> Result<()> {
     use walkdir::WalkDir;
     fs::create_dir_all(dst)?;
