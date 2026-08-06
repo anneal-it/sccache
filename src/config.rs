@@ -1262,19 +1262,7 @@ fn config_from_env() -> Result<EnvConfig> {
     };
 
     // ======= Base directory =======
-    // Support multiple paths separated by ';' on Windows and ':' on other platforms
-    // to match PATH behavior.
-    #[cfg(target_os = "windows")]
-    let split_symbol = ';';
-    #[cfg(not(target_os = "windows"))]
-    let split_symbol = ':';
-    let basedirs = env::var_os("SCCACHE_BASEDIRS").map(|s| {
-        s.to_string_lossy()
-            .split(split_symbol)
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_owned())
-            .collect()
-    });
+    let basedirs = env::var_os("SCCACHE_BASEDIRS").map(|s| split_basedirs(&s.to_string_lossy()));
 
     let client_side_mode = bool_from_env_var("SCCACHE_CLIENT_SIDE")?;
 
@@ -1322,6 +1310,59 @@ pub struct Config {
     pub client_side_mode: bool,
 }
 
+// SCCACHE_BASEDIRS (env) and the config-file `basedirs` array support multiple
+// paths separated by ';' on Windows and ':' elsewhere, matching PATH. Empty
+// segments are dropped.
+pub(crate) fn split_basedirs(value: &str) -> Vec<String> {
+    #[cfg(target_os = "windows")]
+    let sep = ';';
+    #[cfg(not(target_os = "windows"))]
+    let sep = ':';
+    value
+        .split(sep)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_owned())
+        .collect()
+}
+
+// Normalize raw basedir strings into the canonical byte form used for prefix
+// stripping: each must be absolute; lexically normalized (drop `.`/`..`/double
+// separators/trailing slash); one trailing `/` re-added so only whole path
+// components match; Windows paths slash-normalized + lowercased; deduped,
+// order-preserving. Shared by config parsing and the Rust hasher's per-compile
+// basedirs (SCCACHE_BASEDIRS from the compile env) so both produce byte-identical
+// keys regardless of which side supplied the basedirs.
+pub(crate) fn normalize_basedirs(raw: Vec<String>) -> Result<Vec<Vec<u8>>> {
+    let mut basedirs = Vec::with_capacity(raw.len());
+    for d in raw {
+        let p = Utf8TypedPathBuf::from(d);
+        if !p.is_absolute() {
+            bail!("Basedir path must be absolute: {:?}", p);
+        }
+        // Normalize basedir: remove double separators, cur_dirs, parent_dirs,
+        // trailing slashes.
+        let p_norm = p.normalize();
+        let mut bytes = p_norm.to_string().into_bytes();
+        // Always add a trailing `/` so we only match complete path components.
+        bytes.push(b'/');
+        // Normalize windows paths: use slashes and lowercase.
+        let normalized = {
+            #[cfg(target_os = "windows")]
+            {
+                normalize_win_path(&bytes)
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                bytes
+            }
+        };
+        if !basedirs.contains(&normalized) {
+            basedirs.push(normalized);
+        }
+    }
+    Ok(basedirs)
+}
+
 impl Config {
     pub fn load() -> Result<Self> {
         let env_conf = config_from_env()?;
@@ -1366,40 +1407,9 @@ impl Config {
             file_basedirs
         };
 
-        // Validate that all basedirs are absolute paths
-        // basedirs_raw is Vec<PathBuf>
-        let mut basedirs = Vec::with_capacity(basedirs_raw.len());
-        for d in basedirs_raw {
-            let p = Utf8TypedPathBuf::from(d);
-            if !p.is_absolute() {
-                bail!("Basedir path must be absolute: {:?}", p);
-            }
-            // Normalize basedir:
-            // remove double separators, cur_dirs, parent_dirs, trailing slashes
-            let p_norm = p.normalize();
-            let mut bytes = p_norm.to_string().into_bytes();
-
-            // Always add a trailing `/` to basedirs to ensure we only match complete path
-            // components
-            bytes.push(b'/');
-
-            // normalize windows paths: use slashes and lowercase
-            let normalized = {
-                #[cfg(target_os = "windows")]
-                {
-                    normalize_win_path(&bytes)
-                }
-
-                #[cfg(not(target_os = "windows"))]
-                {
-                    bytes
-                }
-            };
-            // push only if not already present
-            if !basedirs.contains(&normalized) {
-                basedirs.push(normalized);
-            }
-        }
+        // Validate + normalize into the canonical prefix-match byte form
+        // (shared with the Rust hasher's per-compile basedirs).
+        let basedirs = normalize_basedirs(basedirs_raw)?;
 
         if !basedirs.is_empty() && log::log_enabled!(log::Level::Debug) {
             let basedirs_str: Vec<String> = basedirs

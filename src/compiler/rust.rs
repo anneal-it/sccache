@@ -1524,7 +1524,34 @@ where
         _cache_control: CacheControl,
     ) -> Result<HashResult<T>> {
         trace!("[{}]: generate_hash_key", self.parsed_args.crate_name);
-        let basedirs = storage.basedirs();
+        // Per-compile basedirs: if THIS compile's environment carries
+        // SCCACHE_BASEDIRS, strip against those (each git worktree sets its own
+        // root via cargo's `[env]`) instead of the server-startup config
+        // basedirs. The daemon's config basedirs are fixed when the server
+        // starts, so they cannot cover worktrees created afterwards; taking the
+        // value per-request is what makes cross-checkout Rust cache hits work for
+        // the git-worktree workflow without restarting the server (sccache#2595).
+        // Normalized identically to the config-file basedirs so the keys match
+        // whichever side supplied them. Falls back to the server config basedirs
+        // when the var is absent, empty, or invalid.
+        let env_basedirs: Option<Vec<Vec<u8>>> = env_vars
+            .iter()
+            .find(|(k, _)| k == "SCCACHE_BASEDIRS")
+            .map(|(_, v)| v.to_string_lossy().into_owned())
+            .filter(|v| !v.is_empty())
+            .and_then(|v| {
+                match crate::config::normalize_basedirs(crate::config::split_basedirs(&v)) {
+                    Ok(b) if !b.is_empty() => Some(b),
+                    Ok(_) => None,
+                    Err(e) => {
+                        debug!("ignoring invalid SCCACHE_BASEDIRS in compile env: {}", e);
+                        None
+                    }
+                }
+            });
+        let basedirs: &[Vec<u8>] = env_basedirs
+            .as_deref()
+            .unwrap_or_else(|| storage.basedirs());
         // TODO: this doesn't produce correct arguments if they should be concatenated - should use iter_os_strings
         let os_string_arguments: Vec<(OsString, Option<OsString>)> = self
             .parsed_args
