@@ -12,6 +12,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::LazyLock;
 
+#[path = "../guard/mod.rs"]
+mod guard;
+
 pub static CRATE_DIR: LazyLock<PathBuf> =
     LazyLock::new(|| Path::new(file!()).parent().unwrap().join("../test-crate"));
 pub static CARGO: LazyLock<OsString> = LazyLock::new(|| std::env::var_os("CARGO").unwrap());
@@ -132,6 +135,8 @@ impl Drop for SccacheTest<'_> {
 }
 
 pub fn stop_sccache() -> Result<()> {
+    // Every server these tests start goes through here first.
+    guard::refuse_live_server(guard::inherited_port());
     trace!("sccache --stop-server");
 
     Command::new(SCCACHE_BIN.as_os_str())

@@ -64,6 +64,11 @@ Also keep in mind:
   committed and CI builds `--locked`.
 - Some tests need real compilers (gcc, clang, msvc, nvcc) or a running server;
   if you skipped a test locally, say so instead of claiming it passed.
+- The integration tests stop and start sccache servers on the default port:
+  `tests/harness` strips `SCCACHE_SERVER_PORT`, so an environment variable
+  cannot isolate them. On a machine whose own builds use an sccache server, run
+  them in a container, VM or separate user account. They refuse to start while
+  a server already listens unless `SCCACHE_TEST_ALLOW_LIVE=1`.
 
 ## 5. Read the docs already in this repo
 

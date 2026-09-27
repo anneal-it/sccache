@@ -252,6 +252,10 @@ The list of features can be found in the `Cargo.toml` file, `[features]` section
 
 By default, `sccache` builds with support for all storage backends, but individual backends may be disabled by resetting the list of features and enabling all the other backends. Refer the [Cargo Documentation](http://doc.crates.io/manifest.html#the-features-section) for details on how to select features with Cargo.
 
+### Running the tests on a machine that already runs sccache
+
+The integration tests (`tests/system.rs`, `tests/dist.rs`, `tests/sccache_args.rs`, `tests/sccache_cargo.rs`, `tests/sccache_rustc.rs`) start and stop real sccache servers. `tests/harness` strips every `SCCACHE_*` variable, including `SCCACHE_SERVER_PORT`, from the commands it runs, so an environment variable cannot move those tests off the default port 4226: on a machine where your own builds use an sccache server, they stop it. Run the full suite in a container, a VM, a separate user account or CI. The tests refuse to start while something already listens on the port they would use; set `SCCACHE_TEST_ALLOW_LIVE=1` to run them anyway.
+
 ### Building portable binaries
 
 When building with the `dist-server` feature, `sccache` will depend on OpenSSL, which can be an annoyance if you want to distribute portable binaries. It is possible to statically link against OpenSSL using the `openssl/vendored` feature.

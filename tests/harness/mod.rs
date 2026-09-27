@@ -27,6 +27,8 @@ use predicates::prelude::*;
 use serde::Serialize;
 use uuid::Uuid;
 
+#[path = "../guard/mod.rs"]
+mod guard;
 const CONTAINER_NAME_PREFIX: &str = "sccache_dist_test";
 const DIST_IMAGE: &str = "sccache_dist_test_image";
 const DIST_DOCKERFILE: &str = include_str!("Dockerfile.sccache-dist");
@@ -140,10 +142,14 @@ pub fn prune_command(mut cmd: Command) -> Command {
 }
 
 pub fn sccache_command() -> Command {
+    // prune_command strips SCCACHE_SERVER_PORT, so these commands always use
+    // the default port: refuse to run if a server already listens there.
+    guard::refuse_live_server(guard::DEFAULT_PORT);
     prune_command(Command::new(env!("CARGO_BIN_EXE_sccache")))
 }
 
 pub fn cargo_command() -> Command {
+    guard::refuse_live_server(guard::DEFAULT_PORT);
     prune_command(Command::new("cargo"))
 }
 
