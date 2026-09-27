@@ -254,7 +254,7 @@ By default, `sccache` builds with support for all storage backends, but individu
 
 ### Running the tests on a machine that already runs sccache
 
-The integration tests (`tests/system.rs`, `tests/dist.rs`, `tests/sccache_args.rs`, `tests/sccache_cargo.rs`, `tests/sccache_rustc.rs`) start and stop real sccache servers. `tests/harness` strips every `SCCACHE_*` variable, including `SCCACHE_SERVER_PORT`, from the commands it runs, so an environment variable cannot move those tests off the default port 4226: on a machine where your own builds use an sccache server, they stop it. Run the full suite in a container, a VM, a separate user account or CI. The tests refuse to start while something already listens on the port they would use; set `SCCACHE_TEST_ALLOW_LIVE=1` to run them anyway.
+The integration tests (`tests/system.rs`, `tests/dist.rs`, `tests/sccache_args.rs`, `tests/sccache_cargo.rs`, `tests/sccache_rustc.rs`) start and stop real sccache servers. `tests/harness` strips every `SCCACHE_*` variable, including `SCCACHE_SERVER_PORT`, from the commands it runs, so an environment variable cannot move those tests off the default port 4226: on a machine where your own builds use an sccache server, they stop it. Run the full suite in a VM, a container with its own network namespace, or CI; a separate user account on the same host still shares the loopback port. The tests refuse to start while a server already answers at the port (or `SCCACHE_SERVER_UDS` socket) they would use; set `SCCACHE_TEST_ALLOW_LIVE=1` to run them anyway.
 
 ### Building portable binaries
 

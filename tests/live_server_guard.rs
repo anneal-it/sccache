@@ -45,3 +45,31 @@ fn default_port_matches_the_client() {
         "tests/guard DEFAULT_PORT drifted from src/commands.rs"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn refuses_a_listening_unix_socket() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sccache.sock");
+    let _listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    let err = guard::check_endpoint(&guard::Endpoint::Unix(path.clone()), false).unwrap_err();
+    assert!(err.contains(&path.display().to_string()), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn allows_a_unix_socket_nobody_listens_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("absent.sock");
+    assert_eq!(
+        guard::check_endpoint(&guard::Endpoint::Unix(path), false),
+        Ok(())
+    );
+}
+
+#[test]
+fn refuses_an_abstract_socket_it_cannot_probe_unless_overridden() {
+    let abstract_socket = guard::Endpoint::UnixAbstract("sccache".to_owned());
+    assert!(guard::check_endpoint(&abstract_socket, false).is_err());
+    assert_eq!(guard::check_endpoint(&abstract_socket, true), Ok(()));
+}

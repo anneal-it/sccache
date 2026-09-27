@@ -67,8 +67,9 @@ Also keep in mind:
 - The integration tests stop and start sccache servers on the default port:
   `tests/harness` strips `SCCACHE_SERVER_PORT`, so an environment variable
   cannot isolate them. On a machine whose own builds use an sccache server, run
-  them in a container, VM or separate user account. They refuse to start while
-  a server already listens unless `SCCACHE_TEST_ALLOW_LIVE=1`.
+  them in a VM, a container with its own network namespace, or CI (a separate
+  user account still shares the loopback port). They refuse to start while a
+  server already listens unless `SCCACHE_TEST_ALLOW_LIVE=1`.
 
 ## 5. Read the docs already in this repo
 

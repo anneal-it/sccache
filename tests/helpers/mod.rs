@@ -136,7 +136,7 @@ impl Drop for SccacheTest<'_> {
 
 pub fn stop_sccache() -> Result<()> {
     // Every server these tests start goes through here first.
-    guard::refuse_live_server(guard::inherited_port());
+    guard::refuse_live_inherited_server();
     trace!("sccache --stop-server");
 
     Command::new(SCCACHE_BIN.as_os_str())
