@@ -38,19 +38,26 @@ const HOW_TO_ISOLATE: &str = "Run them in a VM, a container with its own network
 pub enum Endpoint {
     Tcp(u16),
     Unix(PathBuf),
-    /// A Linux abstract socket (`\x00name`), which this guard cannot probe portably.
-    UnixAbstract(String),
+    /// A Linux abstract socket (`SCCACHE_SERVER_UDS=\x00name`), name unescaped.
+    UnixAbstract(Vec<u8>),
 }
 
-/// The endpoint a command that inherits this process's environment will use:
-/// `SCCACHE_SERVER_UDS` first (on Unix), then `SCCACHE_SERVER_PORT`, then the
-/// default port.
+/// The endpoint a command that inherits this process's environment will use,
+/// with the client's precedence and parsing (`get_addr` and
+/// `SocketAddr::parse_uds`): `SCCACHE_SERVER_UDS` first on Unix, where a
+/// `\x00` prefix means an abstract socket on Linux and Android and an
+/// unparseable one makes the client fall back to TCP; then
+/// `SCCACHE_SERVER_PORT`; then the default port.
 #[allow(dead_code)]
 pub fn inherited_endpoint() -> Endpoint {
     #[cfg(unix)]
     if let Ok(uds) = std::env::var("SCCACHE_SERVER_UDS") {
-        if let Some(name) = uds.strip_prefix("\\x00") {
-            return Endpoint::UnixAbstract(name.to_owned());
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        if let Some(rest) = uds.strip_prefix("\\x00") {
+            return match sccache::util::ascii_unescape_default(rest.as_bytes()) {
+                Ok(name) => Endpoint::UnixAbstract(name),
+                Err(_) => Endpoint::Tcp(inherited_port()),
+            };
         }
         return Endpoint::Unix(PathBuf::from(uds));
     }
@@ -97,16 +104,48 @@ pub fn check_endpoint(endpoint: &Endpoint, allow: bool) -> Result<(), String> {
         }
         Endpoint::Unix(path) => {
             #[cfg(unix)]
-            if std::os::unix::net::UnixStream::connect(path).is_ok() {
-                return refuse(format!(
-                    "a server is already listening on the socket {}",
-                    path.display()
-                ));
+            {
+                let probe = std::os::unix::net::UnixStream::connect(path);
+                if let Some(what) = socket_in_use(probe, &path.display().to_string()) {
+                    return refuse(what);
+                }
             }
             Ok(())
         }
-        Endpoint::UnixAbstract(name) => refuse(format!(
-            "SCCACHE_SERVER_UDS names the abstract socket \\x00{name}, which this guard cannot probe"
+        Endpoint::UnixAbstract(name) => {
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            {
+                use std::os::linux::net::SocketAddrExt;
+                let label = format!("\\x00{}", name.escape_ascii());
+                let probe = std::os::unix::net::SocketAddr::from_abstract_name(name)
+                    .and_then(|addr| std::os::unix::net::UnixStream::connect_addr(&addr));
+                if let Some(what) = socket_in_use(probe, &label) {
+                    return refuse(what);
+                }
+            }
+            let _ = name;
+            Ok(())
+        }
+    }
+}
+
+/// `Some(reason)` unless the probe proved nobody listens: only "no such
+/// socket" and "connection refused" do. Anything else (permission denied, say)
+/// is inconclusive, and a server the tests cannot see could still be stopped
+/// or have its socket path replaced by the test server.
+#[cfg(unix)]
+fn socket_in_use(
+    probe: std::io::Result<std::os::unix::net::UnixStream>,
+    label: &str,
+) -> Option<String> {
+    use std::io::ErrorKind;
+    match probe {
+        Ok(_) => Some(format!(
+            "a server is already listening on the socket {label}"
+        )),
+        Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::ConnectionRefused) => None,
+        Err(e) => Some(format!(
+            "could not tell whether a server listens on the socket {label} ({e})"
         )),
     }
 }

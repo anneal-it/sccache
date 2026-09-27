@@ -67,9 +67,35 @@ fn allows_a_unix_socket_nobody_listens_on() {
     );
 }
 
+#[cfg(unix)]
 #[test]
-fn refuses_an_abstract_socket_it_cannot_probe_unless_overridden() {
-    let abstract_socket = guard::Endpoint::UnixAbstract("sccache".to_owned());
-    assert!(guard::check_endpoint(&abstract_socket, false).is_err());
-    assert_eq!(guard::check_endpoint(&abstract_socket, true), Ok(()));
+fn refuses_a_socket_it_cannot_probe() {
+    // A socket path under a directory the test cannot search: connecting fails
+    // with PermissionDenied, which does not prove the socket is idle.
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let locked = dir.path().join("locked");
+    std::fs::create_dir(&locked).unwrap();
+    let path = locked.join("sccache.sock");
+    let _listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let result = guard::check_endpoint(&guard::Endpoint::Unix(path), false);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+    // Root can search any directory; then the probe connects and refuses anyway.
+    assert!(result.is_err(), "{result:?}");
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn probes_abstract_sockets() {
+    use std::os::linux::net::SocketAddrExt;
+    let name = format!("sccache-guard-test-{}", std::process::id()).into_bytes();
+    let addr = std::os::unix::net::SocketAddr::from_abstract_name(&name).unwrap();
+    let listener = std::os::unix::net::UnixListener::bind_addr(&addr).unwrap();
+    assert!(guard::check_endpoint(&guard::Endpoint::UnixAbstract(name.clone()), false).is_err());
+    drop(listener);
+    assert_eq!(
+        guard::check_endpoint(&guard::Endpoint::UnixAbstract(name), false),
+        Ok(())
+    );
 }
