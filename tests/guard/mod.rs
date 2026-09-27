@@ -97,9 +97,14 @@ pub fn check_endpoint(endpoint: &Endpoint, allow: bool) -> Result<(), String> {
     match endpoint {
         Endpoint::Tcp(port) => {
             let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, *port));
+            // Only a refused connection proves the port idle; a timeout or any
+            // other error is inconclusive.
             match TcpStream::connect_timeout(&addr, Duration::from_millis(250)) {
                 Ok(_) => refuse(format!("a server is already listening on 127.0.0.1:{port}")),
-                Err(_) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => Ok(()),
+                Err(e) => refuse(format!(
+                    "could not tell whether a server listens on 127.0.0.1:{port} ({e})"
+                )),
             }
         }
         Endpoint::Unix(path) => {
@@ -115,6 +120,9 @@ pub fn check_endpoint(endpoint: &Endpoint, allow: bool) -> Result<(), String> {
         Endpoint::UnixAbstract(name) => {
             #[cfg(any(target_os = "linux", target_os = "android"))]
             {
+                #[cfg(target_os = "android")]
+                use std::os::android::net::SocketAddrExt;
+                #[cfg(target_os = "linux")]
                 use std::os::linux::net::SocketAddrExt;
                 let label = format!("\\x00{}", name.escape_ascii());
                 let probe = std::os::unix::net::SocketAddr::from_abstract_name(name)

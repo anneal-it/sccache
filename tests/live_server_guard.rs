@@ -88,6 +88,9 @@ fn refuses_a_socket_it_cannot_probe() {
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[test]
 fn probes_abstract_sockets() {
+    #[cfg(target_os = "android")]
+    use std::os::android::net::SocketAddrExt;
+    #[cfg(target_os = "linux")]
     use std::os::linux::net::SocketAddrExt;
     let name = format!("sccache-guard-test-{}", std::process::id()).into_bytes();
     let addr = std::os::unix::net::SocketAddr::from_abstract_name(&name).unwrap();
