@@ -15,10 +15,12 @@
 //! a leftover server from an earlier step is expected).
 
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
-use std::sync::OnceLock;
+use std::sync::Mutex;
 use std::time::Duration;
 
-/// The port an sccache client uses when `SCCACHE_SERVER_PORT` is unset.
+/// The port an sccache client uses when `SCCACHE_SERVER_PORT` is unset. Mirrors
+/// `DEFAULT_PORT` in src/commands.rs (private to the crate);
+/// tests/live_server_guard.rs fails if the two drift apart.
 #[allow(dead_code)]
 pub const DEFAULT_PORT: u16 = 4226;
 
@@ -54,15 +56,23 @@ pub fn check(port: u16, allow: bool) -> Result<(), String> {
 
 /// Panic unless nothing listens on `port` or `SCCACHE_TEST_ALLOW_LIVE=1` is set.
 ///
-/// Checked once per test binary: after the first check passes, the tests' own
-/// servers are expected to come and go on that port.
+/// Checked once per port per test binary: after the first check passes, the
+/// tests' own servers are expected to come and go on that port, so a later
+/// listener cannot be told apart from them. A server that some other program
+/// starts on the port while the tests run is therefore not detected; that is
+/// why the README says to run these tests in a sandbox rather than rely on this.
 #[allow(dead_code)]
 pub fn refuse_live_server(port: u16) {
-    static CHECKED: OnceLock<()> = OnceLock::new();
-    CHECKED.get_or_init(|| {
-        let allow = std::env::var(ALLOW_VAR).is_ok_and(|v| v == "1");
-        if let Err(message) = check(port, allow) {
-            panic!("{message}");
-        }
-    });
+    static CHECKED: Mutex<Vec<u16>> = Mutex::new(Vec::new());
+    let mut checked = CHECKED
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if checked.contains(&port) {
+        return;
+    }
+    let allow = std::env::var(ALLOW_VAR).is_ok_and(|v| v == "1");
+    if let Err(message) = check(port, allow) {
+        panic!("{message}");
+    }
+    checked.push(port);
 }

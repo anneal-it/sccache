@@ -29,8 +29,19 @@ fn allows_an_idle_port() {
 }
 
 #[test]
-fn the_override_allows_a_listening_port() {
+fn allows_a_listening_port_when_overridden() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     assert_eq!(guard::check(port, true), Ok(()));
+}
+
+#[test]
+fn default_port_matches_the_client() {
+    // src/commands.rs keeps DEFAULT_PORT private; pin the copy the guard uses.
+    let commands = include_str!("../src/commands.rs");
+    let expected = format!("pub const DEFAULT_PORT: u16 = {};", guard::DEFAULT_PORT);
+    assert!(
+        commands.contains(&expected),
+        "tests/guard DEFAULT_PORT drifted from src/commands.rs"
+    );
 }
