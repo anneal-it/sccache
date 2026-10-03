@@ -1920,7 +1920,13 @@ fn find_cuda_compilers() -> Vec<Compiler> {
 //    AMD's official debian packages.
 // 3. Otherwise, just bail.
 fn find_hip_compiler() -> Option<Compiler> {
-    let env_vars: Vec<(OsString, OsString)> = env::vars_os().collect();
+    // Everything but SCCACHE_*: the harness strips those so that every command
+    // reaches the test daemon on the default port, and re-applying a saved
+    // SCCACHE_SERVER_PORT or SCCACHE_SERVER_UDS here would send the HIP compiles
+    // to whatever server that names instead.
+    let env_vars: Vec<(OsString, OsString)> = env::vars_os()
+        .filter(|(k, _)| !k.to_string_lossy().starts_with("SCCACHE_"))
+        .collect();
 
     if let Ok(hip_clang_path) = env::var("HIP_CLANG_PATH") {
         let clang_path = Path::new(&hip_clang_path).join("clang");

@@ -1,5 +1,7 @@
 #![cfg(unix)]
 
+mod guard;
+
 use assert_cmd::Command;
 use tempfile::tempdir;
 
@@ -44,6 +46,7 @@ impl Drop for StopServer {
 // └── RUST_FILE.rs
 #[test]
 fn test_symlinks() {
+    guard::refuse_live_inherited_server();
     let root = tempdir().unwrap();
     let root = root.path();
 
